@@ -1,8 +1,12 @@
 // ==UserScript==
 // @name         Claude Counter
-// @namespace    https://github.com/she-llac/claude-counter
+// @namespace    https://github.com/UltraSunDK/claude-counter
 // @version      0.4.2-userscript
 // @description  Shows token count, cache timer, and usage bars on claude.ai.
+// @homepageURL  https://github.com/UltraSunDK/claude-counter
+// @supportURL   https://github.com/UltraSunDK/claude-counter/issues
+// @downloadURL  https://raw.githubusercontent.com/UltraSunDK/claude-counter/main/userscript/claude-counter.user.js
+// @updateURL    https://raw.githubusercontent.com/UltraSunDK/claude-counter/main/userscript/claude-counter.user.js
 // @match        https://claude.ai/*
 // @run-at       document-start
 // @grant        none
@@ -147,9 +151,15 @@
 	const CC = (globalThis.ClaudeCounter = globalThis.ClaudeCounter || {});
 
 	CC.DOM = Object.freeze({
-		CHAT_MENU_TRIGGER: '[data-testid="chat-menu-trigger"]',
-		MODEL_SELECTOR_DROPDOWN: '[data-testid="model-selector-dropdown"]',
+		// Header (tokens + cache timer) anchors
+		CHAT_MENU_TRIGGER: '[data-testid="chat-menu-trigger"]', // legacy
+		CHAT_TITLE_SPLIT: '[data-testid="chat-title-split"]', // 2026-09 header
+		HEADER_ANCHOR: '[data-testid="chat-title-split"], [data-testid="chat-menu-trigger"]',
 		CHAT_PROJECT_WRAPPER: '.chat-project-wrapper',
+		// Usage row (session + weekly) anchors
+		MODEL_SELECTOR_DROPDOWN: '[data-testid="model-selector-dropdown"]', // legacy
+		COMPOSER_ACTIONS: '[data-cds="ChatComposerActions"]', // 2026-09 composer
+		USAGE_LINE_ANCHOR: '[data-cds="ChatComposerActions"], [data-testid="model-selector-dropdown"]',
 		BRIDGE_SCRIPT_ID: 'cc-bridge-script'
 	});
 
@@ -550,7 +560,7 @@
 		initialize() {
 			// Header container (tokens + cache timer)
 			this.headerContainer = document.createElement('div');
-			this.headerContainer.className = 'text-text-500 text-xs !px-1 cc-header';
+			this.headerContainer.className = 'text-text-500 text-xs !px-1 shrink-0 cc-header';
 
 			this.headerDisplay = document.createElement('span');
 			this.headerDisplay.className = 'cc-headerItem';
@@ -588,7 +598,7 @@
 
 				if (usageMissing && !usageReattachPending) {
 					usageReattachPending = true;
-					CC.waitForElement(CC.DOM.MODEL_SELECTOR_DROPDOWN, 60000).then((el) => {
+					CC.waitForElement(CC.DOM.USAGE_LINE_ANCHOR, 60000).then((el) => {
 						usageReattachPending = false;
 						if (el) this.attachUsageLine();
 					});
@@ -596,7 +606,7 @@
 
 				if (headerMissing && !headerReattachPending) {
 					headerReattachPending = true;
-					CC.waitForElement(CC.DOM.CHAT_MENU_TRIGGER, 60000).then((el) => {
+					CC.waitForElement(CC.DOM.HEADER_ANCHOR, 60000).then((el) => {
 						headerReattachPending = false;
 						if (el) this.attachHeader();
 					});
@@ -700,9 +710,14 @@
 		}
 
 		attachHeader() {
-			const chatMenu = document.querySelector(CC.DOM.CHAT_MENU_TRIGGER);
-			if (!chatMenu) return;
-			const anchor = chatMenu.closest(CC.DOM.CHAT_PROJECT_WRAPPER) || chatMenu.parentElement;
+			const trigger = document.querySelector(CC.DOM.HEADER_ANCHOR);
+			if (!trigger) return;
+			// New header (2026-09): the title + "more options" buttons live in a flex
+			// row tagged chat-title-split; the counter goes right after that row.
+			// Legacy header: after the chat menu's project wrapper.
+			const anchor = trigger.matches(CC.DOM.CHAT_TITLE_SPLIT)
+				? trigger
+				: trigger.closest(CC.DOM.CHAT_PROJECT_WRAPPER) || trigger.parentElement;
 			if (!anchor) return;
 			if (anchor.nextElementSibling !== this.headerContainer) {
 				anchor.after(this.headerContainer);
@@ -713,6 +728,22 @@
 
 		attachUsageLine() {
 			if (!this.usageLine) return;
+			// New composer (2026-09): the action buttons are absolutely positioned
+			// inside a `relative` wrapper (attach bottom-left, send bottom-right).
+			// That wrapper is a normal child of the composer card's column flex, so
+			// the usage row goes right after it. Don't walk up from the model
+			// selector: in open chats it lives in a footer row outside the card.
+			const composerActions = document.querySelector(CC.DOM.COMPOSER_ACTIONS);
+			const composerAnchor = composerActions?.parentElement;
+			if (composerAnchor) {
+				if (composerAnchor.nextElementSibling !== this.usageLine) {
+					composerAnchor.after(this.usageLine);
+				}
+				this.refreshProgressChrome();
+				return;
+			}
+
+			// Legacy composer: find the toolbar flex row that holds the buttons.
 			const modelSelector = document.querySelector(CC.DOM.MODEL_SELECTOR_DROPDOWN);
 			if (!modelSelector) return;
 			const gridContainer = modelSelector.closest('[data-testid="chat-input-grid-container"]');
@@ -1186,10 +1217,10 @@
 	async function handleUrlChange() {
 		currentConversationId = getConversationId();
 
-		waitForElement(CC.DOM.MODEL_SELECTOR_DROPDOWN, 60000).then((el) => {
+		waitForElement(CC.DOM.USAGE_LINE_ANCHOR, 60000).then((el) => {
 			if (el) ui.attachUsageLine();
 		});
-		waitForElement(CC.DOM.CHAT_MENU_TRIGGER, 60000).then((el) => {
+		waitForElement(CC.DOM.HEADER_ANCHOR, 60000).then((el) => {
 			if (el) ui.attachHeader();
 		});
 
