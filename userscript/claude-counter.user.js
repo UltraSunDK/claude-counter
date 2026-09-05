@@ -510,18 +510,9 @@
 			this.pendingCache = false;
 
 			this.usageLine = null;
-			this.sessionUsageSpan = null;
-			this.weeklyUsageSpan = null;
-			this.sessionBar = null;
-			this.sessionBarFill = null;
-			this.weeklyBar = null;
-			this.weeklyBarFill = null;
-			this.sessionResetMs = null;
-			this.weeklyResetMs = null;
-			this.sessionMarker = null;
-			this.weeklyMarker = null;
-			this.sessionWindowStartMs = null;
-			this.weeklyWindowStartMs = null;
+			this.usageMainRow = null;
+			this.usageModelRow = null;
+			this.usageWindows = null; // key -> { label, hours, group, span, bar, fill, marker, resetMs, windowStartMs }
 			this.refreshingUsage = false;
 
 			this.domObserver = null;
@@ -553,8 +544,9 @@
 			};
 
 			applyBarChrome(this.lengthBar, { fillWarn: fillColor });
-			applyBarChrome(this.sessionBar, { fillWarn: CC.COLORS.RED_WARNING });
-			applyBarChrome(this.weeklyBar, { fillWarn: CC.COLORS.RED_WARNING });
+			for (const win of Object.values(this.usageWindows || {})) {
+				applyBarChrome(win.bar, { fillWarn: CC.COLORS.RED_WARNING });
+			}
 		}
 
 		initialize() {
@@ -615,49 +607,57 @@
 			this.domObserver.observe(document.body, { childList: true, subtree: true });
 		}
 
+		_createUsageWindow({ key, label, hours, textFirst }) {
+			const span = document.createElement('span');
+			span.className = 'cc-usageText';
+
+			const bar = document.createElement('div');
+			bar.className = 'cc-bar cc-bar--usage';
+			const fill = document.createElement('div');
+			fill.className = 'cc-bar__fill';
+			const marker = document.createElement('div');
+			marker.className = 'cc-bar__marker cc-hidden';
+			marker.style.left = '0%';
+			bar.appendChild(fill);
+			bar.appendChild(marker);
+
+			const group = document.createElement('div');
+			group.className = `cc-usageGroup cc-usageGroup--${key} cc-hidden`;
+			if (textFirst) {
+				group.appendChild(span);
+				group.appendChild(bar);
+			} else {
+				group.appendChild(bar);
+				group.appendChild(span);
+			}
+
+			return { key, label, hours, group, span, bar, fill, marker, resetMs: null, windowStartMs: null };
+		}
+
 		_initUsageLine() {
 			this.usageLine = document.createElement('div');
-			this.usageLine.className =
-				'text-text-400 text-[11px] cc-usageRow cc-hidden flex flex-row items-center gap-3 w-full';
+			this.usageLine.className = 'text-text-400 text-[11px] cc-usageRow cc-usageRows cc-hidden w-full';
 
-			this.sessionUsageSpan = document.createElement('span');
-			this.sessionUsageSpan.className = 'cc-usageText';
+			this.usageWindows = {
+				session: this._createUsageWindow({ key: 'session', label: 'Session', hours: 5, textFirst: true }),
+				weekly: this._createUsageWindow({ key: 'weekly', label: 'Weekly', hours: 24 * 7, textFirst: false }),
+				// Model-scoped 7-day limit (e.g. Fable); only shown when the account reports one.
+				// The label is replaced with the model's display name from the API.
+				model: this._createUsageWindow({ key: 'model', label: 'Fable', hours: 24 * 7, textFirst: true })
+			};
 
-			this.sessionBar = document.createElement('div');
-			this.sessionBar.className = 'cc-bar cc-bar--usage';
-			this.sessionBarFill = document.createElement('div');
-			this.sessionBarFill.className = 'cc-bar__fill';
-			this.sessionMarker = document.createElement('div');
-			this.sessionMarker.className = 'cc-bar__marker cc-hidden';
-			this.sessionMarker.style.left = '0%';
-			this.sessionBar.appendChild(this.sessionBarFill);
-			this.sessionBar.appendChild(this.sessionMarker);
+			// Row 1: session (left) + weekly (right). Row 2: model-scoped limit, full width.
+			this.usageMainRow = document.createElement('div');
+			this.usageMainRow.className = 'cc-usageLine';
+			this.usageMainRow.appendChild(this.usageWindows.session.group);
+			this.usageMainRow.appendChild(this.usageWindows.weekly.group);
 
-			this.weeklyUsageSpan = document.createElement('span');
-			this.weeklyUsageSpan.className = 'cc-usageText';
+			this.usageModelRow = document.createElement('div');
+			this.usageModelRow.className = 'cc-usageLine cc-hidden';
+			this.usageModelRow.appendChild(this.usageWindows.model.group);
 
-			this.weeklyBar = document.createElement('div');
-			this.weeklyBar.className = 'cc-bar cc-bar--usage';
-			this.weeklyBarFill = document.createElement('div');
-			this.weeklyBarFill.className = 'cc-bar__fill';
-			this.weeklyMarker = document.createElement('div');
-			this.weeklyMarker.className = 'cc-bar__marker cc-hidden';
-			this.weeklyMarker.style.left = '0%';
-			this.weeklyBar.appendChild(this.weeklyBarFill);
-			this.weeklyBar.appendChild(this.weeklyMarker);
-
-			this.sessionGroup = document.createElement('div');
-			this.sessionGroup.className = 'cc-usageGroup';
-			this.sessionGroup.appendChild(this.sessionUsageSpan);
-			this.sessionGroup.appendChild(this.sessionBar);
-
-			this.weeklyGroup = document.createElement('div');
-			this.weeklyGroup.className = 'cc-usageGroup cc-usageGroup--weekly';
-			this.weeklyGroup.appendChild(this.weeklyBar);
-			this.weeklyGroup.appendChild(this.weeklyUsageSpan);
-
-			this.usageLine.appendChild(this.sessionGroup);
-			this.usageLine.appendChild(this.weeklyGroup);
+			this.usageLine.appendChild(this.usageMainRow);
+			this.usageLine.appendChild(this.usageModelRow);
 
 			this.refreshProgressChrome();
 
@@ -691,14 +691,20 @@
 			);
 
 			setupTooltip(
-				this.sessionGroup,
+				this.usageWindows.session.group,
 				makeTooltip("5-hour session window.\nThe bar shows your usage.\nThe line marks where you are in the window."),
 				{ topOffset: 8 }
 			);
 
 			setupTooltip(
-				this.weeklyGroup,
+				this.usageWindows.weekly.group,
 				makeTooltip("7-day usage window.\nThe bar shows your usage.\nThe line marks where you are in the window."),
+				{ topOffset: 8 }
+			);
+
+			setupTooltip(
+				this.usageWindows.model.group,
+				makeTooltip("7-day model-specific window (e.g. Fable).\nSeparate weekly limit for that model.\nThe bar shows your usage.\nThe line marks where you are in the window."),
 				{ topOffset: 8 }
 			);
 		}
@@ -874,85 +880,69 @@
 
 		setUsage(usage) {
 			this.refreshProgressChrome();
-			const session = usage?.five_hour || null;
-			const weekly = usage?.seven_day || null;
-			const hasAnyUsage =
-				!!(session && typeof session.utilization === 'number') || !!(weekly && typeof weekly.utilization === 'number');
-			this.usageLine?.classList.toggle('cc-hidden', !hasAnyUsage);
+			if (!this.usageWindows) return;
 
-			if (session && typeof session.utilization === 'number') {
-				const rawPct = session.utilization;
-				const pct = Math.round(rawPct * 10) / 10;
-				this.sessionResetMs = session.resets_at ? Date.parse(session.resets_at) : null;
-				this.sessionWindowStartMs = this.sessionResetMs ? this.sessionResetMs - 5 * 60 * 60 * 1000 : null;
-				const resetText = this.sessionResetMs ? ` · resets in ${formatResetCountdown(this.sessionResetMs)}` : '';
-				this.sessionUsageSpan.textContent = `Session: ${pct}%${resetText}`;
+			const data = {
+				session: usage?.five_hour || null,
+				weekly: usage?.seven_day || null,
+				model: usage?.seven_day_model || null
+			};
+			if (data.model?.label) this.usageWindows.model.label = data.model.label;
 
-				const width = Math.max(0, Math.min(100, rawPct));
-				this.sessionBarFill.style.width = `${width}%`;
-				this.sessionBarFill.classList.toggle('cc-warn', width >= 90);
-				this.sessionBarFill.classList.toggle('cc-full', width >= 99.5);
-			} else {
-				this.sessionUsageSpan.textContent = '';
-				this.sessionBarFill.style.width = '0%';
-				this.sessionBarFill.classList.remove('cc-warn', 'cc-full');
-				this.sessionResetMs = null;
-				this.sessionWindowStartMs = null;
+			const has = {};
+			for (const [key, win] of Object.entries(this.usageWindows)) {
+				has[key] = this._renderUsageWindow(win, data[key]);
 			}
 
-			const hasWeekly = weekly && typeof weekly.utilization === 'number';
-			this.weeklyGroup?.classList.toggle('cc-hidden', !hasWeekly);
-			this.sessionGroup?.classList.toggle('cc-usageGroup--single', !hasWeekly);
-
-			if (hasWeekly) {
-				this.weeklyUsageSpan.classList.remove('cc-hidden');
-				this.weeklyBar.classList.remove('cc-hidden');
-
-				const rawPct = weekly.utilization;
-				const pct = Math.round(rawPct * 10) / 10;
-				this.weeklyResetMs = weekly.resets_at ? Date.parse(weekly.resets_at) : null;
-				this.weeklyWindowStartMs = this.weeklyResetMs ? this.weeklyResetMs - 7 * 24 * 60 * 60 * 1000 : null;
-				const resetText = this.weeklyResetMs ? ` · resets in ${formatResetCountdown(this.weeklyResetMs)}` : '';
-				this.weeklyUsageSpan.textContent = `Weekly: ${pct}%${resetText}`;
-
-				const width = Math.max(0, Math.min(100, rawPct));
-				this.weeklyBarFill.style.width = `${width}%`;
-				this.weeklyBarFill.classList.toggle('cc-warn', width >= 90);
-				this.weeklyBarFill.classList.toggle('cc-full', width >= 99.5);
-			} else {
-				this.weeklyUsageSpan.classList.add('cc-hidden');
-				this.weeklyBar.classList.add('cc-hidden');
-				this.weeklyResetMs = null;
-				this.weeklyWindowStartMs = null;
-				this.weeklyBarFill.classList.remove('cc-warn', 'cc-full');
-			}
+			this.usageLine?.classList.toggle('cc-hidden', !(has.session || has.weekly || has.model));
+			this.usageMainRow?.classList.toggle('cc-hidden', !(has.session || has.weekly));
+			this.usageWindows.session.group.classList.toggle('cc-usageGroup--single', has.session && !has.weekly);
+			this.usageModelRow?.classList.toggle('cc-hidden', !has.model);
 
 			this._updateMarkers();
 		}
 
-		_updateMarkers() {
-			const now = Date.now();
+		_renderUsageWindow(win, w) {
+			const has = !!(w && typeof w.utilization === 'number');
+			win.group.classList.toggle('cc-hidden', !has);
 
-			if (this.sessionMarker && this.sessionWindowStartMs && this.sessionResetMs) {
-				const total = this.sessionResetMs - this.sessionWindowStartMs;
-				const elapsed = Math.max(0, Math.min(total, now - this.sessionWindowStartMs));
-				const ratio = total > 0 ? elapsed / total : 0;
-				const pct = Math.max(0, Math.min(100, ratio * 100));
-				this.sessionMarker.classList.remove('cc-hidden');
-				this.sessionMarker.style.left = `${pct}%`;
-			} else if (this.sessionMarker) {
-				this.sessionMarker.classList.add('cc-hidden');
+			if (!has) {
+				win.span.textContent = '';
+				win.fill.style.width = '0%';
+				win.fill.classList.remove('cc-warn', 'cc-full');
+				win.resetMs = null;
+				win.windowStartMs = null;
+				return false;
 			}
 
-			if (this.weeklyMarker && this.weeklyWindowStartMs && this.weeklyResetMs) {
-				const total = this.weeklyResetMs - this.weeklyWindowStartMs;
-				const elapsed = Math.max(0, Math.min(total, now - this.weeklyWindowStartMs));
-				const ratio = total > 0 ? elapsed / total : 0;
-				const pct = Math.max(0, Math.min(100, ratio * 100));
-				this.weeklyMarker.classList.remove('cc-hidden');
-				this.weeklyMarker.style.left = `${pct}%`;
-			} else if (this.weeklyMarker) {
-				this.weeklyMarker.classList.add('cc-hidden');
+			const rawPct = w.utilization;
+			const pct = Math.round(rawPct * 10) / 10;
+			const resetMs = w.resets_at ? Date.parse(w.resets_at) : NaN;
+			win.resetMs = Number.isFinite(resetMs) ? resetMs : null;
+			win.windowStartMs = win.resetMs ? win.resetMs - win.hours * 60 * 60 * 1000 : null;
+			const resetText = win.resetMs ? ` · resets in ${formatResetCountdown(win.resetMs)}` : '';
+			win.span.textContent = `${win.label}: ${pct}%${resetText}`;
+
+			const width = Math.max(0, Math.min(100, rawPct));
+			win.fill.style.width = `${width}%`;
+			win.fill.classList.toggle('cc-warn', width >= 90);
+			win.fill.classList.toggle('cc-full', width >= 99.5);
+			return true;
+		}
+
+		_updateMarkers() {
+			const now = Date.now();
+			for (const win of Object.values(this.usageWindows || {})) {
+				if (win.windowStartMs && win.resetMs) {
+					const total = win.resetMs - win.windowStartMs;
+					const elapsed = Math.max(0, Math.min(total, now - win.windowStartMs));
+					const ratio = total > 0 ? elapsed / total : 0;
+					const pct = Math.max(0, Math.min(100, ratio * 100));
+					win.marker.classList.remove('cc-hidden');
+					win.marker.style.left = `${pct}%`;
+				} else {
+					win.marker.classList.add('cc-hidden');
+				}
 			}
 		}
 
@@ -973,19 +963,12 @@
 			}
 
 			// Reset countdown text + time markers
-			if (this.sessionResetMs && this.sessionUsageSpan?.textContent) {
-				const idx = this.sessionUsageSpan.textContent.indexOf('· resets in');
+			for (const win of Object.values(this.usageWindows || {})) {
+				if (!win.resetMs || !win.span.textContent) continue;
+				const idx = win.span.textContent.indexOf('· resets in');
 				if (idx !== -1) {
-					const prefix = this.sessionUsageSpan.textContent.slice(0, idx + '· resets in '.length);
-					this.sessionUsageSpan.textContent = `${prefix}${formatResetCountdown(this.sessionResetMs)}`;
-				}
-			}
-
-			if (this.weeklyResetMs && this.weeklyUsageSpan?.textContent) {
-				const idx = this.weeklyUsageSpan.textContent.indexOf('· resets in');
-				if (idx !== -1) {
-					const prefix = this.weeklyUsageSpan.textContent.slice(0, idx + '· resets in '.length);
-					this.weeklyUsageSpan.textContent = `${prefix}${formatResetCountdown(this.weeklyResetMs)}`;
+					const prefix = win.span.textContent.slice(0, idx + '· resets in '.length);
+					win.span.textContent = `${prefix}${formatResetCountdown(win.resetMs)}`;
 				}
 			}
 
@@ -1007,7 +990,7 @@
 	CC.__ccUserscriptStarted = true;
 
 	const STYLE_ID = 'cc-userscript-styles';
-	const STYLES = '/* Header: tokens + cache timer */\n.cc-header {\n\tmargin-top: 2px;\n\tuser-select: none;\n}\n\n.cc-headerItem {\n\twhite-space: nowrap;\n}\n\n/* Usage row: session + weekly */\n.cc-usageRow {\n\tposition: relative;\n\tz-index: 50;\n\tcursor: pointer;\n\tuser-select: none;\n\ttransition: opacity 150ms ease;\n}\n\n.cc-usageRow--dim {\n\topacity: 0.6;\n}\n\n.cc-usageGroup {\n\tdisplay: flex;\n\talign-items: center;\n\tgap: 8px;\n\tflex: 1;\n\tmin-width: 0;\n}\n\n.cc-usageGroup--single {\n\twidth: 100%;\n}\n\n.cc-usageGroup--weekly {\n\tjustify-content: flex-end;\n}\n\n.cc-usageText {\n\twhite-space: nowrap;\n}\n\n/* Bars (mini + usage) */\n.cc-bar {\n\t--cc-radius: 3px;\n\t--cc-stroke: transparent;\n\t--cc-fill: transparent;\n\t--cc-fill-warn: var(--cc-fill);\n\t--cc-marker: transparent;\n\n\tposition: relative;\n\tbox-sizing: border-box;\n\twidth: 100%;\n\theight: 6px;\n\tborder-radius: var(--cc-radius);\n\tborder: 1px solid var(--cc-stroke);\n\toverflow: visible;\n\tuser-select: none;\n}\n\n.cc-bar__fill {\n\twidth: 0%;\n\theight: 100%;\n\tbackground: var(--cc-fill);\n\ttransition: width 300ms ease, background-color 300ms ease;\n\tborder-top-left-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-bottom-left-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-top-right-radius: 0;\n\tborder-bottom-right-radius: 0;\n}\n\n.cc-bar__fill.cc-full {\n\tborder-top-right-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-bottom-right-radius: max(0px, calc(var(--cc-radius) - 1px));\n}\n\n.cc-bar__fill.cc-warn {\n\tbackground: var(--cc-fill-warn);\n}\n\n.cc-bar__marker {\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: 0%;\n\twidth: 2px;\n\tbackground: var(--cc-marker);\n\tpointer-events: none;\n}\n\n.cc-bar--mini {\n\twidth: 60px;\n\theight: 7px;\n\t--cc-radius: 2px;\n}\n\n.cc-bar--usage {\n\theight: 10px;\n\tflex: 1;\n}\n\n/* Tooltips */\n.cc-tooltip {\n\tposition: fixed;\n\tz-index: 9999;\n\tpadding: 4px 8px;\n\tborder-radius: 4px;\n\tfont-size: 12px;\n\twhite-space: pre-line;\n\tuser-select: none;\n\tpointer-events: none;\n\topacity: 0;\n\ttransition: opacity 200ms ease;\n}\n\n.cc-tooltipTrigger {\n\t-webkit-touch-callout: none;\n\t-webkit-user-select: none;\n\tuser-select: none;\n\tcursor: help;\n}\n\n/* Hide optional elements completely (no layout space) */\n.cc-hidden {\n\tdisplay: none !important;\n}\n';
+	const STYLES = '/* Header: tokens + cache timer */\n.cc-header {\n\tmargin-top: 2px;\n\tuser-select: none;\n}\n\n.cc-headerItem {\n\twhite-space: nowrap;\n}\n\n/* Usage rows: session + weekly (row 1), model-scoped limit e.g. Fable (row 2, only when available) */\n.cc-usageRow {\n\tposition: relative;\n\tz-index: 50;\n\tcursor: pointer;\n\tuser-select: none;\n\ttransition: opacity 150ms ease;\n}\n\n.cc-usageRows {\n\tdisplay: flex;\n\tflex-direction: column;\n\tgap: 4px;\n}\n\n.cc-usageLine {\n\tdisplay: flex;\n\tflex-direction: row;\n\talign-items: center;\n\tgap: 12px;\n\twidth: 100%;\n}\n\n.cc-usageRow--dim {\n\topacity: 0.6;\n}\n\n.cc-usageGroup {\n\tdisplay: flex;\n\talign-items: center;\n\tgap: 8px;\n\tflex: 1;\n\tmin-width: 0;\n}\n\n.cc-usageGroup--single {\n\twidth: 100%;\n}\n\n.cc-usageGroup--weekly {\n\tjustify-content: flex-end;\n}\n\n.cc-usageText {\n\twhite-space: nowrap;\n}\n\n/* Bars (mini + usage) */\n.cc-bar {\n\t--cc-radius: 3px;\n\t--cc-stroke: transparent;\n\t--cc-fill: transparent;\n\t--cc-fill-warn: var(--cc-fill);\n\t--cc-marker: transparent;\n\n\tposition: relative;\n\tbox-sizing: border-box;\n\twidth: 100%;\n\theight: 6px;\n\tborder-radius: var(--cc-radius);\n\tborder: 1px solid var(--cc-stroke);\n\toverflow: visible;\n\tuser-select: none;\n}\n\n.cc-bar__fill {\n\twidth: 0%;\n\theight: 100%;\n\tbackground: var(--cc-fill);\n\ttransition: width 300ms ease, background-color 300ms ease;\n\tborder-top-left-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-bottom-left-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-top-right-radius: 0;\n\tborder-bottom-right-radius: 0;\n}\n\n.cc-bar__fill.cc-full {\n\tborder-top-right-radius: max(0px, calc(var(--cc-radius) - 1px));\n\tborder-bottom-right-radius: max(0px, calc(var(--cc-radius) - 1px));\n}\n\n.cc-bar__fill.cc-warn {\n\tbackground: var(--cc-fill-warn);\n}\n\n.cc-bar__marker {\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: 0%;\n\twidth: 2px;\n\tbackground: var(--cc-marker);\n\tpointer-events: none;\n}\n\n.cc-bar--mini {\n\twidth: 60px;\n\theight: 7px;\n\t--cc-radius: 2px;\n}\n\n.cc-bar--usage {\n\theight: 10px;\n\tflex: 1;\n}\n\n/* Tooltips */\n.cc-tooltip {\n\tposition: fixed;\n\tz-index: 9999;\n\tpadding: 4px 8px;\n\tborder-radius: 4px;\n\tfont-size: 12px;\n\twhite-space: pre-line;\n\tuser-select: none;\n\tpointer-events: none;\n\topacity: 0;\n\ttransition: opacity 200ms ease;\n}\n\n.cc-tooltipTrigger {\n\t-webkit-touch-callout: none;\n\t-webkit-user-select: none;\n\tuser-select: none;\n\tcursor: help;\n}\n\n/* Hide optional elements completely (no layout space) */\n.cc-hidden {\n\tdisplay: none !important;\n}\n';
 
 	function injectStyles() {
 		if (document.getElementById(STYLE_ID)) return;
@@ -1064,6 +1047,24 @@
 
 	CC.waitForElement = waitForElement;
 
+	// Model-scoped 7-day limit (e.g. Fable). /usage reports it in `limits[]` as
+	//   { kind: "weekly_scoped", percent: 4, resets_at, scope: { model: { display_name: "Fable" } } }
+	// Prefer Fable if several model-scoped limits exist; ignore surface-scoped ones (e.g. Cowork).
+	function extractModelScopedLimit(limits) {
+		if (!Array.isArray(limits)) return null;
+		const scoped = limits.filter(
+			(l) => l && l.kind === 'weekly_scoped' && l.scope?.model && !l.scope?.surface && typeof l.percent === 'number'
+		);
+		if (scoped.length === 0) return null;
+		const pick = scoped.find((l) => /fable/i.test(l.scope.model.display_name || '')) || scoped[0];
+		const utilization = Math.max(0, Math.min(100, pick.percent));
+		const resets_at = typeof pick.resets_at === 'string' ? pick.resets_at : null;
+		const label = typeof pick.scope.model.display_name === 'string' && pick.scope.model.display_name
+			? pick.scope.model.display_name
+			: 'Model';
+		return { utilization, resets_at, window_hours: 24 * 7, label };
+	}
+
 	function parseUsageFromUsageEndpoint(raw) {
 		if (!raw || typeof raw !== 'object') return null;
 
@@ -1077,9 +1078,10 @@
 
 		const fiveHour = normalizeWindow(raw.five_hour, 5);
 		const sevenDay = normalizeWindow(raw.seven_day, 24 * 7);
+		const model = extractModelScopedLimit(raw.limits);
 
-		if (!fiveHour && !sevenDay) return null;
-		return { five_hour: fiveHour, seven_day: sevenDay };
+		if (!fiveHour && !sevenDay && !model) return null;
+		return { five_hour: fiveHour, seven_day: sevenDay, seven_day_model: model };
 	}
 
 	function parseUsageFromMessageLimit(raw) {
@@ -1097,9 +1099,11 @@
 
 		const fiveHour = normalizeWindow(raw.windows['5h'], 5);
 		const sevenDay = normalizeWindow(raw.windows['7d'], 24 * 7);
+		// Not observed in the SSE payload so far; picked up if it ever carries the same shape.
+		const model = extractModelScopedLimit(raw.limits);
 
-		if (!fiveHour && !sevenDay) return null;
-		return { five_hour: fiveHour, seven_day: sevenDay };
+		if (!fiveHour && !sevenDay && !model) return null;
+		return { five_hour: fiveHour, seven_day: sevenDay, seven_day_model: model };
 	}
 
 	let currentConversationId = null;
@@ -1123,6 +1127,12 @@
 	function applyUsageUpdate(normalized, source) {
 		if (!normalized) return;
 		const now = Date.now();
+		// The SSE message_limit event omits the model-scoped limit that /usage
+		// reports. Keep the last known value rather than flashing it away; a
+		// follow-up /usage fetch (see handleMessageLimit) brings it up to date.
+		if (source === 'sse' && !normalized.seven_day_model && usageState?.seven_day_model) {
+			normalized = { ...normalized, seven_day_model: usageState.seven_day_model };
+		}
 		usageState = normalized;
 		lastUsageUpdateMs = now;
 		if (source === 'sse') lastUsageSseMs = now;
@@ -1209,9 +1219,21 @@
 		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil });
 	}
 
+	let scopedRefreshTimer = null;
 	function handleMessageLimit(messageLimit) {
 		const parsed = parseUsageFromMessageLimit(messageLimit);
 		applyUsageUpdate(parsed, 'sse');
+
+		// The SSE event carries only the session + weekly windows. If the account
+		// has a model-scoped limit (e.g. Fable), refresh /usage shortly after so
+		// that bar moves too. Debounced so a burst of events costs one request.
+		if (parsed && !parsed.seven_day_model && usageState?.seven_day_model) {
+			clearTimeout(scopedRefreshTimer);
+			scopedRefreshTimer = setTimeout(() => {
+				scopedRefreshTimer = null;
+				refreshUsage();
+			}, 3000);
+		}
 	}
 
 	async function handleUrlChange() {

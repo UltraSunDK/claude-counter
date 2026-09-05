@@ -80,6 +80,24 @@
 		};
 	}
 
+	// Model-scoped 7-day limit (e.g. Fable). /usage reports it in `limits[]` as
+	//   { kind: "weekly_scoped", percent: 4, resets_at, scope: { model: { display_name: "Fable" } } }
+	// Prefer Fable if several model-scoped limits exist; ignore surface-scoped ones (e.g. Cowork).
+	function extractModelScopedLimit(limits) {
+		if (!Array.isArray(limits)) return null;
+		const scoped = limits.filter(
+			(l) => l && l.kind === 'weekly_scoped' && l.scope?.model && !l.scope?.surface && typeof l.percent === 'number'
+		);
+		if (scoped.length === 0) return null;
+		const pick = scoped.find((l) => /fable/i.test(l.scope.model.display_name || '')) || scoped[0];
+		const utilization = Math.max(0, Math.min(100, pick.percent));
+		const resets_at = typeof pick.resets_at === 'string' ? pick.resets_at : null;
+		const label = typeof pick.scope.model.display_name === 'string' && pick.scope.model.display_name
+			? pick.scope.model.display_name
+			: 'Model';
+		return { utilization, resets_at, window_hours: 24 * 7, label };
+	}
+
 	function parseUsageFromUsageEndpoint(raw) {
 		if (!raw || typeof raw !== 'object') return null;
 
@@ -93,9 +111,10 @@
 
 		const fiveHour = normalizeWindow(raw.five_hour, 5);
 		const sevenDay = normalizeWindow(raw.seven_day, 24 * 7);
+		const model = extractModelScopedLimit(raw.limits);
 
-		if (!fiveHour && !sevenDay) return null;
-		return { five_hour: fiveHour, seven_day: sevenDay };
+		if (!fiveHour && !sevenDay && !model) return null;
+		return { five_hour: fiveHour, seven_day: sevenDay, seven_day_model: model };
 	}
 
 	function parseUsageFromMessageLimit(raw) {
@@ -113,9 +132,11 @@
 
 		const fiveHour = normalizeWindow(raw.windows['5h'], 5);
 		const sevenDay = normalizeWindow(raw.windows['7d'], 24 * 7);
+		// Not observed in the SSE payload so far; picked up if it ever carries the same shape.
+		const model = extractModelScopedLimit(raw.limits);
 
-		if (!fiveHour && !sevenDay) return null;
-		return { five_hour: fiveHour, seven_day: sevenDay };
+		if (!fiveHour && !sevenDay && !model) return null;
+		return { five_hour: fiveHour, seven_day: sevenDay, seven_day_model: model };
 	}
 
 	let currentConversationId = null;
@@ -141,6 +162,12 @@
 	function applyUsageUpdate(normalized, source) {
 		if (!normalized) return;
 		const now = Date.now();
+		// The SSE message_limit event omits the model-scoped limit that /usage
+		// reports. Keep the last known value rather than flashing it away; a
+		// follow-up /usage fetch (see handleMessageLimit) brings it up to date.
+		if (source === 'sse' && !normalized.seven_day_model && usageState?.seven_day_model) {
+			normalized = { ...normalized, seven_day_model: usageState.seven_day_model };
+		}
 		usageState = normalized;
 		lastUsageUpdateMs = now;
 		if (source === 'sse') lastUsageSseMs = now;
@@ -209,9 +236,21 @@
 		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil });
 	}
 
+	let scopedRefreshTimer = null;
 	function handleMessageLimit(messageLimit) {
 		const parsed = parseUsageFromMessageLimit(messageLimit);
 		applyUsageUpdate(parsed, 'sse');
+
+		// The SSE event carries only the session + weekly windows. If the account
+		// has a model-scoped limit (e.g. Fable), refresh /usage shortly after so
+		// that bar moves too. Debounced so a burst of events costs one request.
+		if (parsed && !parsed.seven_day_model && usageState?.seven_day_model) {
+			clearTimeout(scopedRefreshTimer);
+			scopedRefreshTimer = setTimeout(() => {
+				scopedRefreshTimer = null;
+				refreshUsage();
+			}, 3000);
+		}
 	}
 
 	CC.bridge.on('cc:generation_start', handleGenerationStart);

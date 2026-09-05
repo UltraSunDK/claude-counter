@@ -8,13 +8,27 @@
 	white-space: nowrap;
 }
 
-/* Usage row: session + weekly */
+/* Usage rows: session + weekly (row 1), model-scoped limit e.g. Fable (row 2, only when available) */
 .cc-usageRow {
 	position: relative;
 	z-index: 50;
 	cursor: pointer;
 	user-select: none;
 	transition: opacity 150ms ease;
+}
+
+.cc-usageRows {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.cc-usageLine {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
 }
 
 .cc-usageRow--dim {
